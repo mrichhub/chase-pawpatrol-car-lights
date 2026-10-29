@@ -32,3 +32,22 @@ struct CRGB {
         return r == other.r && g == other.g && b == other.b;
     }
 };
+
+// Only the tiny API surface main.cpp uses. Integration tests can exercise the
+// actual registration/setup/loop code; this does not simulate electrical output
+// or FastLED's driver/scaling implementation (the ESP32 build checks that API).
+struct WS2811 {};
+constexpr std::uint8_t DISABLE_DITHER = 0;
+
+struct HostFastLED {
+    std::uint8_t brightness = 0;
+    unsigned showCount = 0;
+
+    template <typename Chipset, std::uint8_t Pin, EOrder Order>
+    void addLeds(CRGB*, int) {}
+    void setBrightness(std::uint8_t value) { brightness = value; }
+    void setDither(std::uint8_t) {}
+    void show() { ++showCount; }
+};
+
+inline HostFastLED FastLED;

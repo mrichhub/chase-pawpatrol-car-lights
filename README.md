@@ -2,9 +2,10 @@
 
 Standalone firmware for 16 individually addressable **5 V WS2811 RGB pixels** on
 a homemade Chase police car Halloween costume. It uses an ESP32, PlatformIO,
-Arduino, C++17, and FastLED. Power on to start alternating red/blue lights;
-after four seconds the effect changes to police strobes, then synchronized
-brightness waves for four seconds. The three effects repeat indefinitely.
+Arduino, C++17, and FastLED. Power on to start alternating red/blue lights,
+then cycle through seven active police-car effects, each for four seconds. The
+28-second rotation repeats indefinitely. Nine effects are implemented; Scanner
+Sweep and Red/Blue Checkerboard are currently disabled.
 No Wi-Fi, Bluetooth, network services, stored settings, or secrets
 are used or required.
 
@@ -65,9 +66,11 @@ if needed; also verify GPIO 18 is available on that board. The environment name
 can stay `esp32dev` so the commands above still work. Other boards have not been
 build-verified here.
 
-To enable selection messages, set `SerialDebug = true` in `include/Config.h`,
-rebuild, and run `pio device monitor -e esp32dev`. Default baud is 115200; keep
-`monitor_speed` and `SerialBaud` consistent. Firmware never waits for a monitor.
+Selection messages are enabled by default. Run `pio device monitor -e esp32dev`
+at 115200 baud to see `Animation Change: {animationName}` at startup and whenever
+the animation changes. Set `SerialDebug = false` in `include/Config.h` and
+rebuild/upload to disable them. Keep `monitor_speed` and `SerialBaud` consistent.
+Firmware never waits for a monitor.
 
 ## Power and wiring
 
@@ -155,6 +158,23 @@ These labels describe placement only. The engine uses one independent `CRGB`
 per pixel. A future animation can assign four different colors or intensities
 within group A; no group object forces pixels to share output.
 
+| Order | Animation | Start time in a normal rotation |
+| --- | --- | --- |
+| 1 | Alternating Red/Blue | 0 s |
+| 2 | Police Strobe | 4 s |
+| 3 | Synchronized Brightness Waves | 8 s |
+| 4 | Police Triple Flash | 12 s |
+| 5 | Center-Out Explosion | 16 s |
+| 6 | Rotating Beacon | 20 s |
+| 7 | Comet Chase | 24 s |
+| 1 | Return to Alternating Red/Blue | 28 s |
+
+Scanner Sweep and Red/Blue Checkerboard remain implemented, configured, and
+unit tested, but are excluded from the `animations` registry in `src/main.cpp`.
+To re-enable them, restore `&scanner` and `&checkerboard` between `&tripleFlash`
+and `&centerOut`. The numbered effect descriptions below retain their original
+identifiers; this table shows the current playback order.
+
 ### 1. Alternating red and blue
 
 Each phase lasts **500 ms**, continuously illuminated with no off interval.
@@ -185,12 +205,12 @@ At 0 ms pixels start ON, at 25 ms they turn OFF, at 50 ms they turn ON, and
 so forth. Each color phase restarts the strobe clock, including when a phase
 duration is not divisible by the ON+OFF cycle. Thus red starts ON at exactly
 500 ms. Re-entry always starts with blue ON. ON and OFF durations are independent
-settings; no additional strobe patterns are implemented.
+settings. This animation's original ON/OFF behavior is unchanged.
 
 ### 3. Synchronized red/blue brightness waves
 
 Four traveling brightness waves run simultaneously for **4000 ms**. Colors stay
-fixed; each pixel fades independently between `WaveMinBrightness` (25) and
+fixed; each pixel fades independently between `WaveMinBrightness` (10) and
 `WaveMaxBrightness` (255), before the existing global brightness cap of 50.
 Every activation starts with all 16 pixels at the minimum: dim red or blue by
 default, or completely dark if the minimum is zero.
@@ -223,6 +243,131 @@ minimum and maximum values give steady color; if minimum exceeds maximum, the
 renderer holds the minimum safely. A zero cycle is rejected by configuration
 checks; directly constructing an effect with zero cycle also holds the minimum.
 
+### 4. Police triple flash
+
+Blue pixels 0–3 and 12–15 flash three times, then red pixels 4–11 flash three
+times. Inactive pixels are OFF. Playback starts blue ON. Each flash has 75 ms
+ON; the first two have 75 ms OFF and the third has a 150 ms pause. That pause
+replaces the ordinary OFF interval. Each color occupies 525 ms and the complete
+blue/red sequence takes **1050 ms**.
+
+| Relative time | Blue pixels 0–3, 12–15 | Red pixels 4–11 |
+| --- | --- | --- |
+| 0–74, 150–224, 300–374 ms | ON | OFF |
+| 75–149, 225–299, 375–524 ms | OFF | OFF |
+| 525–599, 675–749, 825–899 ms | OFF | ON |
+| 600–674, 750–824, 900–1049 ms | OFF | OFF |
+
+`TripleFlashOnMs`, `TripleFlashOffMs`, and `TripleFlashPauseMs` adjust that
+sequence independently; `TripleFlashBrightness` adjusts the ON intensity.
+Elapsed-time arithmetic selects the current interval directly, even after a
+missed frame. No flashes or pauses are implemented using waits.
+
+### 5. Scanner sweep (currently disabled)
+
+A bright point slows at each end, reverses, and sweeps back with fading echoes
+behind it. All four groups follow matching local positions simultaneously.
+
+| Group | Color | Back-and-forth path |
+| --- | --- | --- |
+| A | Blue | 0 → 1 → 2 → 3 → 2 → 1 → 0 |
+| B | Red | 4 → 5 → 6 → 7 → 6 → 5 → 4 |
+| C | Red | 8 → 9 → 10 → 11 → 10 → 9 → 8 |
+| D | Blue | 12 → 13 → 14 → 15 → 14 → 13 → 12 |
+
+`ScannerRoundTripMs` (600 ms) includes forward and return travel. Cosine head
+position gives zero velocity at the endpoints; a smooth interpolation kernel
+crossfades neighboring pixels. Three analytically calculated past head positions,
+spaced one sixth of a round trip apart, form the trail without stored frames.
+`ScannerTrailStrength` maps 0–255 to a first echo weight of 0–0.45; the second
+and third weights are its square and cube. The strongest contribution wins
+per pixel. This keeps the head brighter than the trail, and makes the echoes
+continuous through reversal. Set strength to zero for a clean head with no tail.
+`ScannerMinBrightness`/`ScannerMaxBrightness` set the individual intensity range.
+
+### 6. Red/blue checkerboard (currently disabled)
+
+All 16 pixels stay illuminated, with alternating colors **within** each group.
+Colors swap instantly every `CheckerboardPhaseMs` (200 ms), with no fading.
+
+| Phase | Red pixels | Blue pixels |
+| --- | --- | --- |
+| Initial, 0–199 ms | 0, 2, 5, 7, 8, 10, 13, 15 | 1, 3, 4, 6, 9, 11, 12, 14 |
+| Swapped, 200–399 ms | 1, 3, 4, 6, 9, 11, 12, 14 | 0, 2, 5, 7, 8, 10, 13, 15 |
+
+It returns to the initial mapping at 400 ms and on every selection.
+`CheckerboardBrightness` sets the pixel intensity. This mapping belongs only
+to this effect and does not change any other animation's color assignments.
+
+### 7. Center-out explosion
+
+Light starts at the centers, expands to the outer pixels, contracts back to the
+centers, and fades to minimum. All groups remain synchronized.
+
+| Group | Color | Center pixels | Outer pixels |
+| --- | --- | --- | --- |
+| A | Blue | 1, 2 | 0, 3 |
+| B | Red | 5, 6 | 4, 7 |
+| C | Red | 9, 10 | 8, 11 |
+| D | Blue | 13, 14 | 12, 15 |
+
+`CenterOutCycleMs` (700 ms) is divided into four equal phases. First the centers
+rise to maximum, then crossfade to the outers, then crossfade back to the centers,
+then fade to minimum. Smoothstep envelopes provide zero slope at phase boundaries;
+both center and outer pixels have overlapping light during the crossfades.
+`CenterOutMinBrightness`/`CenterOutMaxBrightness` set the intensity range.
+The initial and cycle-boundary frames are at minimum, zero by default.
+
+### 8. Rotating beacon
+
+A concentrated peak moves continuously **forward around a virtual circle**.
+Each physical group is its own synchronized four-pixel circle.
+
+| Group | Color | Circular path |
+| --- | --- | --- |
+| A | Blue | 0 → 1 → 2 → 3 → 0 |
+| B | Red | 4 → 5 → 6 → 7 → 4 |
+| C | Red | 8 → 9 → 10 → 11 → 8 |
+| D | Blue | 12 → 13 → 14 → 15 → 12 |
+
+The first pixel starts at maximum. A compact cosine lobe uses circular distance,
+so the last and first pixels blend as neighbors when wrapping. At an exact pixel
+center the peak is full, its two neighboring centers receive 25% of the intensity
+range, and the opposite pixel is at minimum. `BeaconRotationMs` (800 ms) sets one
+turn; `BeaconMinBrightness`/`BeaconMaxBrightness` set its range. It never reverses.
+
+### 9. Comet chase
+
+A sharper head enters from before the group, travels through it, and exits.
+A longer asymmetric tail follows; the next head enters only after that tail
+has faded. Unlike the beacon, neither the head nor the tail wraps around.
+
+| Group | Color | One-way path |
+| --- | --- | --- |
+| A | Blue | 3 → 2 → 1 → 0, then exit |
+| B | Red | 4 → 5 → 6 → 7, then exit |
+| C | Red | 8 → 9 → 10 → 11, then exit |
+| D | Blue | 15 → 14 → 13 → 12, then exit |
+
+`CometTrailLength` (3) is the approximate tail span in pixel spacings. For distance
+`d` behind the head, the glow is `exp(-2*d/L) * (1-smoothstep(d/L))` until `L`
+spacings, where it smoothly reaches zero. The short leading edge spans one pixel;
+there is no glow farther ahead. A zero trail setting selects a one-pixel tail
+to retain a continuous head. The virtual position runs from -1 to `4 + L`,
+including one spacing of rest after the tail exits. `CometCycleMs` (1000 ms)
+includes entry, travel, tail exit, and rest. With the default settings the head
+peaks at each successive position at 125, 250, 375, and 500 ms; the final tail
+finishes by 875 ms. `CometMinBrightness`/`CometMaxBrightness` set its range.
+Every cycle begins and ends at minimum, zero by default.
+
+The **scanner reverses**, the **beacon wraps**, and the **comet exits and rests**.
+Increasing a cycle duration slows its effect. For a longer comet tail at similar
+head speed, increase `CometCycleMs` as well as `CometTrailLength`, because cycle
+time includes clearing the entire tail. Lower maxima to soften peaks, or raise
+minima to keep a dim background. Flash/checkerboard brightness settings control
+their ON intensity directly. All these raw intensities still pass through the
+unchanged global brightness cap once.
+
 ## Configuration
 
 All firmware settings live in [`include/Config.h`](include/Config.h).
@@ -240,10 +385,24 @@ Change them, then rebuild and upload:
 | `PoliceColorPhaseMs` | `500` | Animation 2 color phase length |
 | `PoliceStrobeOnMs` | `25` | Strobe ON duration |
 | `PoliceStrobeOffMs` | `25` | Strobe OFF duration |
-| `WaveMinBrightness` | `25` | Minimum individual wave intensity, 0–255 |
+| `WaveMinBrightness` | `10` | Minimum individual wave intensity, 0–255 |
 | `WaveMaxBrightness` | `255` | Maximum individual wave intensity, 0–255 |
 | `WaveCycleMs` | `1000` | One complete four-position brightness wave |
-| `SerialDebug` | `false` | Log startup and animation selections |
+| `TripleFlashOnMs` / `TripleFlashOffMs` / `TripleFlashPauseMs` | `75` / `75` / `150` | Flash, normal OFF, and third-flash pause |
+| `TripleFlashBrightness` | `255` | Triple-flash ON intensity |
+| `ScannerRoundTripMs` | `600` | Complete forward/back motion |
+| `ScannerMinBrightness` / `ScannerMaxBrightness` | `0` / `255` | Scanner intensity range |
+| `ScannerTrailStrength` | `110` | Echo gain control, 0–255 (see above) |
+| `CheckerboardPhaseMs` | `200` | Time between checkerboard color swaps |
+| `CheckerboardBrightness` | `255` | Checkerboard pixel intensity |
+| `CenterOutCycleMs` | `700` | Rise, expansion, contraction, and fade |
+| `CenterOutMinBrightness` / `CenterOutMaxBrightness` | `0` / `255` | Center-out intensity range |
+| `BeaconRotationMs` | `800` | One forward circular rotation |
+| `BeaconMinBrightness` / `BeaconMaxBrightness` | `0` / `255` | Beacon intensity range |
+| `CometCycleMs` | `1000` | Travel, tail clearance, and rest |
+| `CometMinBrightness` / `CometMaxBrightness` | `0` / `255` | Comet intensity range |
+| `CometTrailLength` | `3` | Approximate tail span in pixel spacings |
+| `SerialDebug` | `true` | Log startup and animation selections |
 | `SerialBaud` | `115200` | Debug UART baud rate |
 
 For wrong colors, try the correct `GRB`, `BRG`, or other FastLED `EOrder` value
@@ -256,6 +415,10 @@ It does not overwrite the source buffer. Temporal dithering is disabled so
 unchanged frames do not need repeated transmissions.
 
 Compile-time checks reject zero timing values and overflowing strobe cycles.
+The new continuous effects hold their minimum safely if directly constructed
+with a zero cycle; invalid triple-flash/checkerboard timing renders OFF. For
+new minimum/maximum ranges, maximum at or below minimum produces constant
+minimum intensity. Byte-sized brightness settings stay in the range 0–255.
 Changing `LedCount` does not require scheduler changes. Existing effect mappings
 are explicit in their respective `.cpp` files: pixels beyond 15 default to OFF,
 and indices missing from a shorter string are safely ignored. Update mappings
@@ -275,13 +438,21 @@ src/
     AlternatingColors.h / .cpp
     PoliceStrobe.h / .cpp
     SynchronizedWaves.h / .cpp
+    PoliceTripleFlash.h / .cpp
+    ScannerSweep.h / .cpp
+    RedBlueCheckerboard.h / .cpp
+    CenterOutExplosion.h / .cpp
+    RotatingBeacon.h / .cpp
+    CometChase.h / .cpp
+    EffectMath.h                   Small shared color/envelope helpers
   engine/
     PixelBuffer.h                  Bounds-checked view of the CRGB array
     AnimationScheduler.h / .cpp     Selection and wall-clock timing
 test/
   run_tests.py                     Host compiler runner; no Python packages
   test_firmware.cpp                Automated production-logic tests
-  support/FastLED.h                Host-only CRGB shim
+  test_new_animations.cpp          New effects and actual firmware integration
+  support/                        Host-only color, Arduino, and RTOS stubs
 ```
 
 `setup()` initializes FastLED, sets brightness, initializes the RAM buffer OFF,
@@ -336,8 +507,8 @@ A future runtime brightness change should also request an LED transmission.
 Future headlights, indicators, or brake lights can use additional pixels and
 expanded renderers. They need explicit output ownership/composition if they must
 remain lit across effects: these initial animations deliberately turn unmapped
-pixels OFF. No vehicle-light behavior, chasing effects, extra strobe patterns,
-or connectivity is implemented.
+pixels OFF. No vehicle-light behavior, button handling, or connectivity is
+implemented.
 
 ## Verification
 
@@ -355,8 +526,8 @@ needed. Temporary executables are created outside the project and cleaned up.
 No third-party test framework or Python packages are needed. This suite is run
 by the script above, not `pio test`.
 
-The 39 tests compile the **actual animation and scheduler `.cpp` files** against
-a minimal host color shim. They check complete pixel mappings, exact phase and
+The 58 tests compile the **actual animation and scheduler `.cpp` files** against
+host-only color/hardware stubs. They check complete pixel mappings, exact phase and
 strobe boundaries, independently configured timing, phase clock resets,
 5000 ms test rotation, N-effect registration, per-pixel intensity, re-entry,
 stale-pixel clearing, skipped loop frames, invalid configurations, bounds,
@@ -370,13 +541,23 @@ first/last overlap, cycle continuity, custom and degenerate ranges, short/odd/
 large cycle lengths, bounds, raw intensity before global scaling, and rollover.
 An integration test uses the current 4000 ms rotation and 25/25 ms strobe settings
 to verify animation order 1 → 2 → 3 → 1 and wave restart on re-entry.
-The shim does not test the ESP32 driver, global brightness scaling, or physical
-signal timings; the real FastLED integration is checked by the ESP32 build.
+Further tests include the actual `main.cpp` with hardware stubs, checking its real
+seven-entry active registry, two full rotations, first-frame restart for every
+active effect, return to the first after the comet, and rollover. Disabled effects
+retain their unit coverage. New effect tests cover all triple-flash edges
+and flash counts, scanner reversal/trail strength, exact checkerboard mappings,
+center-out envelope phases, circular beacon wrapping, comet tail/exit behavior,
+cycle continuity, configurable brightness, bounds, and degenerate inputs.
+The stubs verify that setup retains the global brightness cap and renderers
+provide unscaled RGB values. They do not simulate the ESP32 driver, actual
+FastLED brightness scaling, physical signal timing, or RTOS scheduling; the
+real FastLED integration is checked by the ESP32 build.
 
-Implementation verification completed: **39/39 host tests passed with both
-sanitizers; `pio run -e esp32dev` succeeded**. The new wave animation has not been
-uploaded or physically tested here; the existing effects' hardware behavior is
-preserved.
+Implementation verification completed: **58/58 host tests passed with both
+sanitizers; `pio run -e esp32dev` succeeded**. The six new animations have not
+been uploaded or physically tested here. Existing configuration values and the
+first three animation implementations are preserved, including the current
+`WaveMinBrightness = 10`.
 
 Before wearing, verify on a workbench with the intended power bank:
 
@@ -392,10 +573,16 @@ Before wearing, verify on a workbench with the intended power bank:
    3/4/8/15, then 2/5/9/14, 1/6/10/13, and 0/7/11/12. Check the four groups stay
    synchronized, adjacent fades overlap, and there is no brightness jump when a
    one-second wave cycle repeats. Adjust wave speed/contrast to suit the costume.
-5. At 12 s confirm animation 1 restarts in its original mapping, with no
-   added transition blackout. Observe several rotations and power-cycle to check
-   startup always returns to animation 1. Debug logs can confirm selection times.
-6. Inspect for flickering, resets, warm wiring/connectors, and supply droop under
+5. At 12 s confirm three blue flashes then three red flashes. At 16 s verify
+   center-origin expansion/contraction, at 20 s check forward beacon wrapping,
+   and at 24 s confirm comet travel followed by tail clearance before another
+   entry. The scanner and checkerboard should not appear in the rotation.
+6. At 28 s confirm animation 1 restarts in its original mapping, with no
+   added transition blackout. Some effects deliberately start at their configured
+   minimum (zero by default); this is part of their frame, not a transition wait.
+   Observe several rotations and power-cycle to check startup always returns to
+   animation 1. Debug logs can confirm selection times.
+7. Inspect for flickering, resets, warm wiring/connectors, and supply droop under
    load. Check the far end's 5 V rail and the bank's low-current auto-off behavior.
    Software tests cannot establish power, converter, or wearable reliability.
 
@@ -410,7 +597,8 @@ Before wearing, verify on a workbench with the intended power bank:
 | Only part of string works | `LedCount`, damaged pixel/connector, data direction, actual addresses versus physical lamps |
 | Power bank switches itself off | Verify bank supports the load across both effects; try a bank with an appropriate always-on mode |
 | Upload does not connect | USB data cable, correct serial port/driver, BOOT procedure, board target, upload speed |
-| Serial monitor is quiet | `SerialDebug` defaults OFF; enable, rebuild/upload, and match baud |
+| Upload reports port busy / exclusive lock failure | Stop the existing serial monitor with Ctrl+C in its terminal (or terminate its VS Code task), then retry Upload and Monitor. Closing the terminal panel alone can leave the task running. Enable `platformio-ide.autoCloseSerialMonitor` in VS Code settings and keep only one monitor open. |
+| Serial monitor is quiet | Confirm `SerialDebug` is enabled, rebuild/upload, and match 115200 baud (or your configured value) |
 
 ## Wearable and strobe precautions
 
@@ -428,7 +616,8 @@ in susceptible people; reducing brightness does not establish that a strobe is
 safe. Avoid using flashing modes around anyone with photosensitivity, follow
 venue restrictions, and stop use if anyone feels unwell. See the
 [Epilepsy Foundation's photosensitivity guidance](https://www.epilepsy.com/what-is-epilepsy/seizure-triggers/photosensitivity).
-To omit animation 2, remove `&policeStrobe` from the registry and rebuild; the
-remaining effects still vary colors or brightness. Power off if flashing should be avoided
+To omit the active strobe/triple-flash effects, remove `&policeStrobe` and
+`&tripleFlash` from the registry and rebuild. Checkerboard is already disabled. The remaining
+effects still vary colors or brightness. Power off if flashing should be avoided
 entirely. Do not shorten flash timings or add more aggressive patterns without
 an explicit configuration decision and a fresh review of suitability.

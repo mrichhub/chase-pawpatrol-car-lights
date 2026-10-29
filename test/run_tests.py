@@ -23,9 +23,16 @@ def main():
         flags += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
     sources = [
         root / "test/test_firmware.cpp",
+        root / "test/test_new_animations.cpp",
         root / "src/animations/AlternatingColors.cpp",
         root / "src/animations/PoliceStrobe.cpp",
         root / "src/animations/SynchronizedWaves.cpp",
+        root / "src/animations/PoliceTripleFlash.cpp",
+        root / "src/animations/ScannerSweep.cpp",
+        root / "src/animations/RedBlueCheckerboard.cpp",
+        root / "src/animations/CenterOutExplosion.cpp",
+        root / "src/animations/RotatingBeacon.cpp",
+        root / "src/animations/CometChase.cpp",
         root / "src/engine/AnimationScheduler.cpp",
     ]
     with tempfile.TemporaryDirectory(prefix="chase-led-tests-") as temporary:

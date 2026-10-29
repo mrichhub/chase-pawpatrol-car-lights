@@ -702,7 +702,7 @@ void configured_three_effect_rotation_and_wave_reentry() {
     expect(f.leds, StrobeRed);
     CHECK(scheduler.update(8000, f.pixels));
     CHECK(scheduler.currentIndex() == 2);
-    expectWaveMinimum(f.leds, 25);
+    expectWaveMinimum(f.leds, config::WaveMinBrightness);
     scheduler.update(8250, f.pixels);
     CHECK(f.leds[3].b == 255);
     scheduler.update(11999, f.pixels);
@@ -713,7 +713,7 @@ void configured_three_effect_rotation_and_wave_reentry() {
     scheduler.update(16000, f.pixels);
     scheduler.update(20000, f.pixels);
     CHECK(scheduler.currentIndex() == 2);
-    expectWaveMinimum(f.leds, 25);
+    expectWaveMinimum(f.leds, config::WaveMinBrightness);
 }
 
 void waves_scheduler_rollover_and_skipped_frames() {
@@ -739,6 +739,8 @@ void waves_scheduler_rollover_and_skipped_frames() {
 }
 
 }  // namespace
+
+int runNewAnimationTests();
 
 int main() {
     struct Test { const char* name; void (*run)(); };
@@ -794,6 +796,10 @@ int main() {
             return 1;
         }
     }
-    std::cout << passed << " tests passed\n";
+    const int additionalPassed = runNewAnimationTests();
+    if (additionalPassed < 0) {
+        return 1;
+    }
+    std::cout << passed + additionalPassed << " tests passed\n";
     return 0;
 }
