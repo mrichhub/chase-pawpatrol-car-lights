@@ -25,6 +25,7 @@ def main():
         root / "test/test_firmware.cpp",
         root / "src/animations/AlternatingColors.cpp",
         root / "src/animations/PoliceStrobe.cpp",
+        root / "src/animations/SynchronizedWaves.cpp",
         root / "src/engine/AnimationScheduler.cpp",
     ]
     with tempfile.TemporaryDirectory(prefix="chase-led-tests-") as temporary:

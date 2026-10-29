@@ -6,6 +6,7 @@
 #include "Config.h"
 #include "animations/AlternatingColors.h"
 #include "animations/PoliceStrobe.h"
+#include "animations/SynchronizedWaves.h"
 #include "engine/AnimationScheduler.h"
 
 namespace {
@@ -16,9 +17,13 @@ const AlternatingColors alternatingColors(config::AlternatingColorsPhaseMs);
 const PoliceStrobe policeStrobe(config::PoliceColorPhaseMs,
                                config::PoliceStrobeOnMs,
                                config::PoliceStrobeOffMs);
+const SynchronizedWaves synchronizedWaves(config::WaveMinBrightness,
+                                          config::WaveMaxBrightness,
+                                          config::WaveCycleMs);
 
 // Add future animations here, in playback order. The scheduler is unchanged.
-const Animation* const animations[] = {&alternatingColors, &policeStrobe};
+const Animation* const animations[] = {&alternatingColors, &policeStrobe,
+                                       &synchronizedWaves};
 AnimationScheduler scheduler(animations, sizeof(animations) / sizeof(animations[0]),
                              config::AnimationRotationMs);
 

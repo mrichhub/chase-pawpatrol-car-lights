@@ -21,6 +21,10 @@ constexpr std::uint32_t PoliceColorPhaseMs = 500;
 constexpr std::uint32_t PoliceStrobeOnMs = 25;
 constexpr std::uint32_t PoliceStrobeOffMs = 25;
 
+constexpr std::uint8_t WaveMinBrightness = 25;
+constexpr std::uint8_t WaveMaxBrightness = 255;
+constexpr std::uint32_t WaveCycleMs = 1000;
+
 constexpr bool SerialDebug = false;
 constexpr unsigned long SerialBaud = 115200;
 
@@ -35,5 +39,6 @@ static_assert(PoliceStrobeOnMs > 0 && PoliceStrobeOffMs > 0,
 static_assert(PoliceStrobeOnMs <=
                   std::numeric_limits<std::uint32_t>::max() - PoliceStrobeOffMs,
               "Strobe cycle must fit in uint32_t");
+static_assert(WaveCycleMs > 0, "Wave cycle must be positive");
 
 }  // namespace config

@@ -3,8 +3,9 @@
 Standalone firmware for 16 individually addressable **5 V WS2811 RGB pixels** on
 a homemade Chase police car Halloween costume. It uses an ESP32, PlatformIO,
 Arduino, C++17, and FastLED. Power on to start alternating red/blue lights;
-after four seconds the effect changes to police strobes. The two effects repeat
-indefinitely. No Wi-Fi, Bluetooth, network services, stored settings, or secrets
+after four seconds the effect changes to police strobes, then synchronized
+brightness waves for four seconds. The three effects repeat indefinitely.
+No Wi-Fi, Bluetooth, network services, stored settings, or secrets
 are used or required.
 
 ## Hardware and defaults
@@ -186,6 +187,42 @@ duration is not divisible by the ON+OFF cycle. Thus red starts ON at exactly
 500 ms. Re-entry always starts with blue ON. ON and OFF durations are independent
 settings; no additional strobe patterns are implemented.
 
+### 3. Synchronized red/blue brightness waves
+
+Four traveling brightness waves run simultaneously for **4000 ms**. Colors stay
+fixed; each pixel fades independently between `WaveMinBrightness` (25) and
+`WaveMaxBrightness` (255), before the existing global brightness cap of 50.
+Every activation starts with all 16 pixels at the minimum: dim red or blue by
+default, or completely dark if the minimum is zero.
+
+| Physical group | Fixed color | Wave direction |
+| --- | --- | --- |
+| A | Blue | 3 → 2 → 1 → 0 |
+| B | Red | 4 → 5 → 6 → 7 |
+| C | Red | 8 → 9 → 10 → 11 |
+| D | Blue | 15 → 14 → 13 → 12 |
+
+Pixels 3/4/8/15 brighten first, followed by 2/5/9/14, then 1/6/10/13, then
+0/7/11/12. Each position uses the same raised-cosine pulse, offset by one sixth
+of `WaveCycleMs`. Each pulse lasts half a cycle, with zero slope at its start
+and end. Adjacent pulses overlap, while the first finishes before the last
+brightens; there is no bright first/last overlap at the cycle boundary.
+
+For the default **1000 ms** cycle, the pulse peaks occur near 250, 417, 583, and
+750 ms. The frame returns smoothly to minimum at 1000 ms and repeats four times
+during a normal selection. The calculation uses animation-relative elapsed time,
+so missed frames do not shift the wave. Pixel RGB channels contain the individual
+intensity directly; FastLED applies global brightness once during transmission.
+Thus a wave peak of 255 still respects `GlobalBrightness = 50`.
+
+To experiment, increase `WaveCycleMs` (for example, to 1500) for slower motion or
+decrease it for faster motion. Lower `WaveMinBrightness` for more contrast, or
+raise it for a more continuously illuminated background. Lower
+`WaveMaxBrightness` to soften the peaks. Rebuild and upload after edits. Equal
+minimum and maximum values give steady color; if minimum exceeds maximum, the
+renderer holds the minimum safely. A zero cycle is rejected by configuration
+checks; directly constructing an effect with zero cycle also holds the minimum.
+
 ## Configuration
 
 All firmware settings live in [`include/Config.h`](include/Config.h).
@@ -203,6 +240,9 @@ Change them, then rebuild and upload:
 | `PoliceColorPhaseMs` | `500` | Animation 2 color phase length |
 | `PoliceStrobeOnMs` | `25` | Strobe ON duration |
 | `PoliceStrobeOffMs` | `25` | Strobe OFF duration |
+| `WaveMinBrightness` | `25` | Minimum individual wave intensity, 0–255 |
+| `WaveMaxBrightness` | `255` | Maximum individual wave intensity, 0–255 |
+| `WaveCycleMs` | `1000` | One complete four-position brightness wave |
 | `SerialDebug` | `false` | Log startup and animation selections |
 | `SerialBaud` | `115200` | Debug UART baud rate |
 
@@ -234,6 +274,7 @@ src/
     PixelMapping.h                 Optional index-list helper for effects
     AlternatingColors.h / .cpp
     PoliceStrobe.h / .cpp
+    SynchronizedWaves.h / .cpp
   engine/
     PixelBuffer.h                  Bounds-checked view of the CRGB array
     AnimationScheduler.h / .cpp     Selection and wall-clock timing
@@ -314,7 +355,7 @@ needed. Temporary executables are created outside the project and cleaned up.
 No third-party test framework or Python packages are needed. This suite is run
 by the script above, not `pio test`.
 
-The 25 tests compile the **actual animation and scheduler `.cpp` files** against
+The 39 tests compile the **actual animation and scheduler `.cpp` files** against
 a minimal host color shim. They check complete pixel mappings, exact phase and
 strobe boundaries, independently configured timing, phase clock resets,
 5000 ms test rotation, N-effect registration, per-pixel intensity, re-entry,
@@ -323,13 +364,19 @@ larger/shorter strings, unchanged-frame suppression, and unsigned rollover.
 Boundary tests use fixed 5000 ms rotation and 50/50 ms strobe inputs, independently
 of the current settings in `Config.h`, so tuning playback does not invalidate
 their expected frames. Additional cases exercise other timing values.
+Wave tests check fixed colors, all four directions and synchronized positions,
+minimum startup, smooth rise/fall, localized peaks, adjacent overlap without
+first/last overlap, cycle continuity, custom and degenerate ranges, short/odd/
+large cycle lengths, bounds, raw intensity before global scaling, and rollover.
+An integration test uses the current 4000 ms rotation and 25/25 ms strobe settings
+to verify animation order 1 → 2 → 3 → 1 and wave restart on re-entry.
 The shim does not test the ESP32 driver, global brightness scaling, or physical
 signal timings; the real FastLED integration is checked by the ESP32 build.
 
-Implementation verification completed: **25/25 host tests passed with both
-sanitizers; `pio run -e esp32dev` succeeded**. The build used 21,968 bytes of
-static RAM and 268,921 bytes of application flash. No upload or physical hardware
-test has been performed.
+Implementation verification completed: **39/39 host tests passed with both
+sanitizers; `pio run -e esp32dev` succeeded**. The new wave animation has not been
+uploaded or physically tested here; the existing effects' hardware behavior is
+preserved.
 
 Before wearing, verify on a workbench with the intended power bank:
 
@@ -341,10 +388,14 @@ Before wearing, verify on a workbench with the intended power bank:
 3. Use slow-motion video or a logic analyzer if available to check ON at
    animation 2 time 0 ms, OFF at 25 ms, ON at 50 ms, red ON at 500 ms, and blue
    ON again at 1000 ms. Allow normal polling and transmission latency.
-4. At 8 s confirm animation 1 restarts in its original mapping, with no
-   transition blackout. Observe several rotations and power-cycle to check the
+4. At 8 s confirm waves begin at dim fixed red/blue, first brightening pixels
+   3/4/8/15, then 2/5/9/14, 1/6/10/13, and 0/7/11/12. Check the four groups stay
+   synchronized, adjacent fades overlap, and there is no brightness jump when a
+   one-second wave cycle repeats. Adjust wave speed/contrast to suit the costume.
+5. At 12 s confirm animation 1 restarts in its original mapping, with no
+   added transition blackout. Observe several rotations and power-cycle to check
    startup always returns to animation 1. Debug logs can confirm selection times.
-5. Inspect for flickering, resets, warm wiring/connectors, and supply droop under
+6. Inspect for flickering, resets, warm wiring/connectors, and supply droop under
    load. Check the far end's 5 V rail and the bank's low-current auto-off behavior.
    Software tests cannot establish power, converter, or wearable reliability.
 
@@ -378,6 +429,6 @@ safe. Avoid using flashing modes around anyone with photosensitivity, follow
 venue restrictions, and stop use if anyone feels unwell. See the
 [Epilepsy Foundation's photosensitivity guidance](https://www.epilepsy.com/what-is-epilepsy/seizure-triggers/photosensitivity).
 To omit animation 2, remove `&policeStrobe` from the registry and rebuild; the
-remaining animation still changes colors. Power off if flashing should be avoided
+remaining effects still vary colors or brightness. Power off if flashing should be avoided
 entirely. Do not shorten flash timings or add more aggressive patterns without
 an explicit configuration decision and a fresh review of suitability.

@@ -1,6 +1,7 @@
 #include "Config.h"
 #include "animations/AlternatingColors.h"
 #include "animations/PoliceStrobe.h"
+#include "animations/SynchronizedWaves.h"
 #include "engine/AnimationScheduler.h"
 
 #include <array>
@@ -460,6 +461,283 @@ void invalid_effect_timings_fail_safely() {
     }
 }
 
+std::uint8_t waveIntensity(const Frame& frame, std::size_t index) {
+    return (index < 4 || index >= 12) ? frame[index].b : frame[index].r;
+}
+
+void expectWaveMinimum(const Frame& frame, std::uint8_t minimum) {
+    for (std::size_t i = 0; i < frame.size(); ++i) {
+        CHECK(frame[i] == ((i < 4 || i >= 12) ? CRGB(0, 0, minimum)
+                                                          : CRGB(minimum, 0, 0)));
+    }
+}
+
+void waves_start_at_minimum_without_stale_colors() {
+    Fixture f;
+    SynchronizedWaves waves(25, 255, 1000);
+    f.pixels.fill(CRGB::Green);
+    CHECK(waves.render(f.pixels, 0));
+    expectWaveMinimum(f.leds, 25);
+    CHECK(!waves.render(f.pixels, 0));
+}
+
+void waves_keep_colors_bounds_and_group_synchronization() {
+    Fixture f;
+    SynchronizedWaves waves(25, 255, 1000);
+    for (std::uint32_t t = 0; t <= 2000; ++t) {
+        waves.render(f.pixels, t);
+        for (std::size_t i = 0; i < f.leds.size(); ++i) {
+            CHECK(f.leds[i].g == 0);
+            CHECK((i < 4 || i >= 12) ? f.leds[i].r == 0 : f.leds[i].b == 0);
+            CHECK(waveIntensity(f.leds, i) >= 25);
+            CHECK(waveIntensity(f.leds, i) <= 255);
+        }
+        // Independent expected directions: all four groups share position p.
+        for (std::size_t p = 0; p < 4; ++p) {
+            const auto intensity = f.leds[3 - p].b;
+            CHECK(f.leds[4 + p].r == intensity);
+            CHECK(f.leds[8 + p].r == intensity);
+            CHECK(f.leds[15 - p].b == intensity);
+        }
+    }
+}
+
+void waves_originate_at_first_position() {
+    Fixture f;
+    SynchronizedWaves waves(25, 255, 1000);
+    waves.render(f.pixels, 100);
+    for (const auto i : {3U, 4U, 8U, 15U}) {
+        CHECK(waveIntensity(f.leds, i) > 25);
+    }
+    for (const auto i : {0U, 1U, 2U, 5U, 6U, 7U, 9U, 10U, 11U, 12U, 13U, 14U}) {
+        CHECK(waveIntensity(f.leds, i) == 25);
+    }
+}
+
+void waves_peaks_travel_in_the_required_order() {
+    Fixture f;
+    SynchronizedWaves waves(25, 255, 1200);
+    constexpr std::size_t ExpectedPixels[][4] = {
+        {3, 4, 8, 15}, {2, 5, 9, 14}, {1, 6, 10, 13}, {0, 7, 11, 12}};
+    constexpr std::uint32_t PeakTimes[] = {300, 500, 700, 900};
+    for (std::size_t position = 0; position < 4; ++position) {
+        waves.render(f.pixels, PeakTimes[position]);
+        for (const auto index : ExpectedPixels[position]) {
+            CHECK(waveIntensity(f.leds, index) == 255);
+        }
+        for (std::size_t other = 0; other < 4; ++other) {
+            if (other != position) {
+                CHECK(waveIntensity(f.leds, ExpectedPixels[other][0]) < 100);
+            }
+        }
+    }
+}
+
+void waves_brighten_and_dim_smoothly() {
+    Fixture f;
+    SynchronizedWaves waves(25, 255, 1200);
+    // A 1200 ms cycle puts all four starts, peaks and ends on integer ms.
+    for (std::size_t position = 0; position < 4; ++position) {
+        const auto start = static_cast<std::uint32_t>(position * 200);
+        std::uint8_t previous = 25;
+        for (std::uint32_t offset = 0; offset <= 600; ++offset) {
+            waves.render(f.pixels, start + offset);
+            const auto current = f.leds[3 - position].b;
+            const int delta = static_cast<int>(current) - previous;
+            CHECK(delta >= -3 && delta <= 3);  // No jumps at pulse edges.
+            CHECK(offset <= 300 ? current >= previous : current <= previous);
+            if (offset == 0 || offset == 600) {
+                CHECK(current == 25);
+            } else if (offset == 300) {
+                CHECK(current == 255);
+            }
+            previous = current;
+        }
+    }
+}
+
+void waves_adjacent_pulses_overlap_but_ends_do_not() {
+    Fixture f;
+    SynchronizedWaves waves(25, 255, 1200);
+    for (std::size_t position = 0; position < 3; ++position) {
+        waves.render(f.pixels, static_cast<std::uint32_t>(400 + position * 200));
+        CHECK(f.leds[3 - position].b > 190);
+        CHECK(f.leds[2 - position].b > 190);
+    }
+    for (std::uint32_t t = 0; t < 1200; ++t) {
+        waves.render(f.pixels, t);
+        CHECK(f.leds[3].b == 25 || f.leds[0].b == 25);
+    }
+}
+
+void waves_repeat_with_a_smooth_cycle_seam() {
+    Fixture f;
+    SynchronizedWaves waves(25, 255, 1000);
+    waves.render(f.pixels, 999);
+    const Frame end = f.leds;
+    waves.render(f.pixels, 1000);
+    expectWaveMinimum(f.leds, 25);
+    expect(f.leds, end);  // Both sides quantize to minimum with zero edge slope.
+    waves.render(f.pixels, 1001);
+    expectWaveMinimum(f.leds, 25);
+    for (std::uint32_t t = 0; t < 1000; t += 7) {
+        waves.render(f.pixels, t);
+        const Frame initial = f.leds;
+        waves.render(f.pixels, t + 1000);
+        expect(f.leds, initial);
+        waves.render(f.pixels, t + 3000);
+        expect(f.leds, initial);
+    }
+}
+
+void waves_zero_minimum_starts_dark() {
+    Fixture f;
+    SynchronizedWaves waves(0, 255, 1000);
+    f.pixels.fill(CRGB::White);
+    waves.render(f.pixels, 0);
+    expect(f.leds, Off);
+    waves.render(f.pixels, 100);
+    CHECK(f.leds[3].b > 0);
+    CHECK(f.leds[2].b == 0);
+    waves.render(f.pixels, 1000);
+    expect(f.leds, Off);
+}
+
+void waves_configurable_ranges_and_degenerate_inputs() {
+    Fixture f;
+    SynchronizedWaves narrow(80, 120, 1000);
+    for (std::uint32_t t = 0; t <= 1000; ++t) {
+        narrow.render(f.pixels, t);
+        for (std::size_t i = 0; i < f.leds.size(); ++i) {
+            CHECK(waveIntensity(f.leds, i) >= 80);
+            CHECK(waveIntensity(f.leds, i) <= 120);
+        }
+    }
+    narrow.render(f.pixels, 250);
+    CHECK(f.leds[3].b == 120);
+    const SynchronizedWaves flat[] = {
+        {70, 70, 1000}, {180, 10, 1000}, {0, 0, 1000},
+        {255, 255, 1000}, {25, 255, 0}};
+    constexpr std::uint8_t ExpectedMinima[] = {70, 180, 0, 255, 25};
+    for (std::size_t i = 0; i < sizeof(flat) / sizeof(flat[0]); ++i) {
+        for (const auto t : {0U, 250U, 750U, 1000U, 4000U}) {
+            flat[i].render(f.pixels, t);
+            expectWaveMinimum(f.leds, ExpectedMinima[i]);
+        }
+    }
+}
+
+void waves_custom_short_odd_and_long_cycles() {
+    Fixture f;
+    for (const auto cycle : {1U, 7U, 733U, 1200U, 3000U}) {
+        SynchronizedWaves waves(25, 255, cycle);
+        for (std::uint32_t t = 0; t < cycle; ++t) {
+            waves.render(f.pixels, t);
+            const Frame initial = f.leds;
+            waves.render(f.pixels, t + cycle);
+            expect(f.leds, initial);
+        }
+    }
+    const auto maximum = std::numeric_limits<std::uint32_t>::max();
+    SynchronizedWaves longCycle(25, 255, maximum);
+    longCycle.render(f.pixels, maximum / 4);
+    CHECK(f.leds[3].b == 255);
+    longCycle.render(f.pixels, maximum - 1);
+    expectWaveMinimum(f.leds, 25);
+    longCycle.render(f.pixels, maximum);
+    expectWaveMinimum(f.leds, 25);
+}
+
+void waves_leave_output_unscaled_for_global_brightness() {
+    Fixture f;
+    SynchronizedWaves waves(25, 255, 1000);
+    waves.render(f.pixels, 250);
+    // The renderer must provide the full raw channel to FastLED, which applies
+    // the unchanged GlobalBrightness cap once at transmission time.
+    CHECK(f.leds[3] == CRGB(0, 0, 255));
+    CHECK(f.leds[4] == CRGB(255, 0, 0));
+    CHECK(config::GlobalBrightness == 50);
+}
+
+void waves_write_only_within_the_buffer() {
+    std::array<CRGB, 6> guarded{};
+    guarded[0] = CRGB::Green;
+    guarded[5] = CRGB::White;
+    PixelBuffer shortString(guarded.data() + 1, 4);
+    SynchronizedWaves waves(25, 255, 1000);
+    waves.render(shortString, 250);
+    CHECK(guarded[0] == CRGB::Green);
+    CHECK(guarded[5] == CRGB::White);
+    CHECK(guarded[4] == CRGB(0, 0, 255));
+    std::array<CRGB, 24> extended{};
+    PixelBuffer longString(extended.data(), extended.size());
+    longString.fill(CRGB::White);
+    waves.render(longString, 250);
+    for (std::size_t i = 16; i < extended.size(); ++i) {
+        CHECK(extended[i] == CRGB::Black);
+    }
+    PixelBuffer empty(nullptr, 0);
+    CHECK(!waves.render(empty, 250));
+}
+
+void configured_three_effect_rotation_and_wave_reentry() {
+    Fixture f;
+    PoliceStrobe strobe(config::PoliceColorPhaseMs, config::PoliceStrobeOnMs,
+                        config::PoliceStrobeOffMs);
+    SynchronizedWaves waves(config::WaveMinBrightness, config::WaveMaxBrightness,
+                            config::WaveCycleMs);
+    const Animation* const registry[] = {&f.colors, &strobe, &waves};
+    AnimationScheduler scheduler(registry, 3, config::AnimationRotationMs);
+    scheduler.update(0, f.pixels);
+    expect(f.leds, ColorsInitial);
+    scheduler.update(500, f.pixels);
+    expect(f.leds, ColorsSwapped);
+    scheduler.update(4000, f.pixels);
+    expect(f.leds, StrobeBlue);
+    scheduler.update(4025, f.pixels);
+    expect(f.leds, Off);
+    scheduler.update(4050, f.pixels);
+    expect(f.leds, StrobeBlue);
+    scheduler.update(4500, f.pixels);
+    expect(f.leds, StrobeRed);
+    CHECK(scheduler.update(8000, f.pixels));
+    CHECK(scheduler.currentIndex() == 2);
+    expectWaveMinimum(f.leds, 25);
+    scheduler.update(8250, f.pixels);
+    CHECK(f.leds[3].b == 255);
+    scheduler.update(11999, f.pixels);
+    CHECK(scheduler.currentIndex() == 2);
+    CHECK(scheduler.update(12000, f.pixels));
+    CHECK(scheduler.currentIndex() == 0);
+    expect(f.leds, ColorsInitial);
+    scheduler.update(16000, f.pixels);
+    scheduler.update(20000, f.pixels);
+    CHECK(scheduler.currentIndex() == 2);
+    expectWaveMinimum(f.leds, 25);
+}
+
+void waves_scheduler_rollover_and_skipped_frames() {
+    Fixture f;
+    SynchronizedWaves waves(25, 255, 1000);
+    const Animation* const registry[] = {&f.colors, &f.strobe, &waves};
+    AnimationScheduler scheduler(registry, 3, 4000);
+    const auto start = std::numeric_limits<std::uint32_t>::max() - 300U;
+    CHECK(scheduler.select(2, start));
+    scheduler.update(start, f.pixels);
+    expectWaveMinimum(f.leds, 25);
+    scheduler.update(start + 250U, f.pixels);
+    CHECK(f.leds[3].b == 255);
+    scheduler.update(start + 750U, f.pixels);  // Deliberately skip frames and wrap.
+    CHECK(f.leds[0].b == 255);
+    scheduler.update(start + 1000U, f.pixels);
+    expectWaveMinimum(f.leds, 25);
+    scheduler.update(start + 3999U, f.pixels);
+    CHECK(scheduler.currentIndex() == 2);
+    scheduler.update(start + 4000U, f.pixels);
+    CHECK(scheduler.currentIndex() == 0);
+    expect(f.leds, ColorsInitial);
+}
+
 }  // namespace
 
 int main() {
@@ -490,6 +768,20 @@ int main() {
         {"single effect rotation", single_animation_restarts_every_interval},
         {"invalid registries", invalid_registries_fail_safely},
         {"invalid effect timings", invalid_effect_timings_fail_safely},
+        {"waves initial minimum and stale colors", waves_start_at_minimum_without_stale_colors},
+        {"waves fixed colors bounds and synchronization", waves_keep_colors_bounds_and_group_synchronization},
+        {"waves start at the first position", waves_originate_at_first_position},
+        {"waves peak direction and localization", waves_peaks_travel_in_the_required_order},
+        {"waves smooth rise and fall", waves_brighten_and_dim_smoothly},
+        {"waves adjacent overlap and separated ends", waves_adjacent_pulses_overlap_but_ends_do_not},
+        {"waves periodicity and smooth seam", waves_repeat_with_a_smooth_cycle_seam},
+        {"waves zero minimum", waves_zero_minimum_starts_dark},
+        {"waves custom and degenerate brightness ranges", waves_configurable_ranges_and_degenerate_inputs},
+        {"waves custom and full-width cycle durations", waves_custom_short_odd_and_long_cycles},
+        {"waves leave global brightness to FastLED", waves_leave_output_unscaled_for_global_brightness},
+        {"waves buffer bounds and extra pixels", waves_write_only_within_the_buffer},
+        {"configured rotation 1 2 3 and restart", configured_three_effect_rotation_and_wave_reentry},
+        {"waves rollover and skipped frames", waves_scheduler_rollover_and_skipped_frames},
     };
     unsigned passed = 0;
     for (const auto& test : tests) {
