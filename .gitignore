@@ -1,0 +1,35 @@
+# PlatformIO / compiled output
+.pio/
+.pioenvs/
+.piolibdeps/
+build/
+dist/
+*.o
+*.a
+*.elf
+*.bin
+*.hex
+*.map
+*.d
+
+# Python test tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Editor and OS state
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local configuration is never needed by the firmware
+.env
+.env.*
+*.log
