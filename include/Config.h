@@ -21,7 +21,7 @@ constexpr std::uint32_t PoliceColorPhaseMs = 500;
 constexpr std::uint32_t PoliceStrobeOnMs = 25;
 constexpr std::uint32_t PoliceStrobeOffMs = 25;
 
-constexpr std::uint8_t WaveMinBrightness = 25;
+constexpr std::uint8_t WaveMinBrightness = 10;
 constexpr std::uint8_t WaveMaxBrightness = 255;
 constexpr std::uint32_t WaveCycleMs = 1000;
 
